@@ -183,7 +183,10 @@ function render(state: ChecklistState) {
               </h1>
             </div>
             <div class="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-200 md:flex">
-              <span class="h-2 w-2 rounded-full bg-[#7ef0c0] shadow-[0_0_12px_rgba(126,240,192,0.6)]"></span>
+              <span class="relative flex h-2 w-2">
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#7ef0c0]/60"></span>
+                <span class="relative inline-flex h-2 w-2 rounded-full bg-[#7ef0c0] shadow-[0_0_12px_rgba(126,240,192,0.6)]"></span>
+              </span>
               Persistente al recargar
             </div>
           </div>
@@ -216,7 +219,6 @@ function render(state: ChecklistState) {
           ${steps
             .map((step) => {
               const itemsMarkup = step.items
-                .filter((item) => isVisible(item, state))
                 .map((item) => {
                   if (item.type === "question") {
                     return `
@@ -241,16 +243,27 @@ function render(state: ChecklistState) {
                     `;
                   }
 
+                  const isChecked = Boolean(state.checks[item.id]);
+                  const wrapperOpen = !item.dependsOn || isVisible(item, state);
+                  const wrapperStart = item.dependsOn
+                    ? `<div class="reveal" data-visible="${wrapperOpen}">`
+                    : "";
+                  const wrapperEnd = item.dependsOn ? `</div>` : "";
+
                   return `
+                    ${wrapperStart}
                     <label class="group flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-4 transition hover:border-white/30">
                       <input
                         type="checkbox"
                         data-check-id="${item.id}"
                         class="mt-1 h-4 w-4 rounded border-white/30 bg-white/10"
-                        ${state.checks[item.id] ? "checked" : ""}
+                        ${isChecked ? "checked" : ""}
                       />
-                      <span class="text-sm text-slate-200 group-hover:text-slate-100">${item.label}</span>
+                      <span class="text-sm text-slate-200 group-hover:text-slate-100 ${
+                        isChecked ? "task-checked" : ""
+                      }">${item.label}</span>
                     </label>
+                    ${wrapperEnd}
                   `;
                 })
                 .join("");

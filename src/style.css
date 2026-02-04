@@ -12,3 +12,24 @@ input[type="checkbox"],
 input[type="radio"] {
   accent-color: #7ef0c0;
 }
+
+.reveal {
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: max-height 600ms ease, opacity 520ms ease, transform 520ms ease;
+  pointer-events: none;
+}
+
+.reveal[data-visible="true"] {
+  max-height: 200px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.task-checked {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
