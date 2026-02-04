@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: #7ef0c0;
+}
