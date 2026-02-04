@@ -6,6 +6,7 @@ type DocRequirement = "si" | "no" | null;
 type ChecklistState = {
   checks: Record<string, boolean>;
   docRequirement: DocRequirement;
+  confirmReset: boolean;
 };
 
 type Item = {
@@ -77,17 +78,18 @@ const steps: Step[] = [
 function loadState(): ChecklistState {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
-    return { checks: {}, docRequirement: null };
+    return { checks: {}, docRequirement: null, confirmReset: false };
   }
 
   try {
     const parsed = JSON.parse(raw) as ChecklistState;
     return {
       checks: parsed.checks ?? {},
-      docRequirement: parsed.docRequirement ?? null
+      docRequirement: parsed.docRequirement ?? null,
+      confirmReset: false
     };
   } catch {
-    return { checks: {}, docRequirement: null };
+    return { checks: {}, docRequirement: null, confirmReset: false };
   }
 }
 
@@ -137,8 +139,16 @@ app.addEventListener("click", (event) => {
   const actionEl = target.closest<HTMLElement>("[data-action]");
   if (!actionEl) return;
   if (actionEl.dataset.action === "reset") {
+    const state = checklistStore.get();
+    checklistStore.set({ ...state, confirmReset: true });
+  }
+  if (actionEl.dataset.action === "reset-confirm") {
     localStorage.removeItem(STORAGE_KEY);
-    checklistStore.set({ checks: {}, docRequirement: null });
+    checklistStore.set({ checks: {}, docRequirement: null, confirmReset: false });
+  }
+  if (actionEl.dataset.action === "reset-cancel") {
+    const state = checklistStore.get();
+    checklistStore.set({ ...state, confirmReset: false });
   }
 });
 
@@ -282,5 +292,39 @@ function render(state: ChecklistState) {
         </section>
       </div>
     </main>
+    ${
+      state.confirmReset
+        ? `
+    <div class="fixed inset-0 z-50 flex items-center justify-center px-6">
+      <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+      <div class="relative w-full max-w-md rounded-2xl border border-white/10 bg-[linear-gradient(150deg,_rgba(21,24,33,0.96),_rgba(11,12,15,0.96))] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.6)]">
+        <p class="text-xs uppercase tracking-[0.3em] text-slate-400">Confirmacion</p>
+        <h3 class="mt-2 text-xl font-semibold text-slate-50 font-['Space_Grotesk']">
+          Limpiar checklist?
+        </h3>
+        <p class="mt-2 text-sm text-slate-300">
+          Esta accion borrara el progreso guardado. Deseas continuar?
+        </p>
+        <div class="mt-6 flex flex-wrap gap-3">
+          <button
+            type="button"
+            data-action="reset-cancel"
+            class="rounded-full border border-white/20 bg-white/5 px-5 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-white/40 hover:text-slate-50"
+          >
+            No
+          </button>
+          <button
+            type="button"
+            data-action="reset-confirm"
+            class="rounded-full border border-[#7ef0c0]/40 bg-[#7ef0c0]/10 px-5 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#7ef0c0] transition hover:border-[#7ef0c0]/70 hover:bg-[#7ef0c0]/20"
+          >
+            Si, limpiar
+          </button>
+        </div>
+      </div>
+    </div>
+    `
+        : ""
+    }
   `;
 }
