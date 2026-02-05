@@ -257,9 +257,10 @@ function convertToDevLink(raw: string, env: EnvOption) {
     return { output: "", status: "URL invalida" };
   }
 
-  const domainMap: Record<string, { country: string }> = {
+  const domainMap: Record<string, { country?: string; countryInPath?: boolean }> = {
     "www.business.hsbc.uk": { country: "uk" },
-    "www.business.hsbc.fr": { country: "fr" }
+    "www.business.hsbc.fr": { country: "fr" },
+    "www.europe.business.hsbc.com": { countryInPath: true }
   };
 
   const entry = domainMap[url.hostname];
@@ -268,14 +269,19 @@ function convertToDevLink(raw: string, env: EnvOption) {
   }
 
   const segments = url.pathname.split("/").filter(Boolean);
-  const language = segments[0] ?? "";
-  const rest = segments.slice(1).join("/");
+  const country = entry.countryInPath ? segments[0] : entry.country ?? "";
+  const language = entry.countryInPath ? segments[1] ?? "" : segments[0] ?? "";
+  const rest = entry.countryInPath ? segments.slice(2).join("/") : segments.slice(1).join("/");
+
+  if (!country) {
+    return { output: "", status: "Pais no encontrado en la URL" };
+  }
 
   if (!language) {
     return { output: "", status: "Idioma no encontrado en la URL" };
   }
 
-  const base = `https://link.${entry.country}.dev.${env}.hsbc/${language}`;
+  const base = `https://link.${country}.dev.${env}.hsbc/${language}`;
   const path = rest ? `/${rest}` : "";
   const output = `${base}${path}${url.search}${url.hash}`;
 
