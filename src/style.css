@@ -33,3 +33,13 @@ input[type="radio"] {
   text-decoration: line-through;
   opacity: 0.6;
 }
+
+.footer-bar {
+  transition: opacity 420ms ease, transform 420ms ease;
+}
+
+body[data-at-top="true"] .footer-bar {
+  opacity: 0;
+  transform: translateY(12px);
+  pointer-events: none;
+}

@@ -124,6 +124,14 @@ if (!app) {
   throw new Error("#app not found");
 }
 
+const body = document.body;
+const updateFooterVisibility = () => {
+  body.dataset.atTop = window.scrollY <= 8 ? "true" : "false";
+};
+window.addEventListener("scroll", updateFooterVisibility, { passive: true });
+window.addEventListener("resize", updateFooterVisibility);
+updateFooterVisibility();
+
 app.addEventListener("change", (event) => {
   const target = event.target as HTMLInputElement | null;
   if (!target) return;
@@ -291,6 +299,7 @@ function convertToDevLink(raw: string, env: EnvOption) {
 function render(state: ChecklistState) {
   const { total, done } = progress(state);
   const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const remaining = Math.max(total - done, 0);
   const devLinks = state.designLinks.map((link) =>
     convertToDevLink(link, state.env)
   );
@@ -305,7 +314,7 @@ function render(state: ChecklistState) {
       : "Ingresa un link para generar la version de desarrollo.";
 
   app.innerHTML = `
-    <main class="min-h-screen bg-[radial-gradient(circle_at_top,_#121521_0%,_#0b0c0f_55%,_#08090b_100%)] px-6 py-10 text-slate-100 md:px-12">
+    <main class="min-h-screen bg-[radial-gradient(circle_at_top,_#121521_0%,_#0b0c0f_55%,_#08090b_100%)] px-6 py-10 pb-28 text-slate-100 md:px-12">
       <div class="mx-auto max-w-4xl">
         <header class="mb-10 flex flex-col gap-6">
           <div class="flex items-start justify-between gap-6">
@@ -488,6 +497,21 @@ function render(state: ChecklistState) {
             })
             .join("")}
         </section>
+      </div>
+      <div class="footer-bar sticky bottom-4 mt-10">
+        <div class="mx-auto max-w-4xl rounded-full border border-white/10 bg-black/50 px-5 py-4 shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur">
+          <div class="flex flex-wrap items-center gap-4">
+            <div class="min-w-[180px] flex-1">
+              <div class="h-2 w-full overflow-hidden rounded-full bg-white/10">
+                <div class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
+              </div>
+              <p class="mt-2 text-xs text-slate-400">${remaining} pendientes</p>
+            </div>
+            <div class="text-sm font-semibold text-slate-100">
+              ${done} / ${total}
+            </div>
+          </div>
+        </div>
       </div>
     </main>
     ${
