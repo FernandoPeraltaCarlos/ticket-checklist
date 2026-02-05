@@ -2,11 +2,14 @@ import "./style.css";
 import { atom } from "nanostores";
 
 type DocRequirement = "si" | "no" | null;
+type EnvOption = "p01" | "p02" | "bwe" | "gwe";
 
 type ChecklistState = {
   checks: Record<string, boolean>;
   docRequirement: DocRequirement;
   confirmReset: boolean;
+  env: EnvOption;
+  designLinks: string[];
 };
 
 type Item = {
@@ -24,6 +27,7 @@ type Step = {
 };
 
 const STORAGE_KEY = "ticket-checklist-v1";
+const DEFAULT_LINKS = [""];
 
 const steps: Step[] = [
   {
@@ -78,18 +82,38 @@ const steps: Step[] = [
 function loadState(): ChecklistState {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
-    return { checks: {}, docRequirement: null, confirmReset: false };
+    return {
+      checks: {},
+      docRequirement: null,
+      confirmReset: false,
+      env: "p01",
+      designLinks: DEFAULT_LINKS
+    };
   }
 
   try {
-    const parsed = JSON.parse(raw) as ChecklistState;
+    const parsed = JSON.parse(raw) as ChecklistState & { designLink?: string };
+    const savedLinks =
+      Array.isArray(parsed.designLinks) && parsed.designLinks.length > 0
+        ? parsed.designLinks
+        : parsed.designLink
+          ? [parsed.designLink]
+          : DEFAULT_LINKS;
     return {
       checks: parsed.checks ?? {},
       docRequirement: parsed.docRequirement ?? null,
-      confirmReset: false
+      confirmReset: false,
+      env: parsed.env ?? "p01",
+      designLinks: savedLinks
     };
   } catch {
-    return { checks: {}, docRequirement: null, confirmReset: false };
+    return {
+      checks: {},
+      docRequirement: null,
+      confirmReset: false,
+      env: "p01",
+      designLinks: DEFAULT_LINKS
+    };
   }
 }
 
@@ -133,6 +157,25 @@ app.addEventListener("change", (event) => {
   }
 });
 
+app.addEventListener("input", (event) => {
+  const target = event.target as HTMLInputElement | HTMLSelectElement | null;
+  if (!target) return;
+
+  if (target.matches("input[type='url'][data-field='designLink']")) {
+    const index = Number(target.dataset.index ?? "0");
+    const state = checklistStore.get();
+    const nextLinks = [...state.designLinks];
+    nextLinks[index] = target.value;
+    checklistStore.set({ ...state, designLinks: nextLinks });
+  }
+
+  if (target.matches("select[data-field='env']")) {
+    const value = target.value as EnvOption;
+    const state = checklistStore.get();
+    checklistStore.set({ ...state, env: value });
+  }
+});
+
 app.addEventListener("click", (event) => {
   const target = event.target as HTMLElement | null;
   if (!target) return;
@@ -144,11 +187,24 @@ app.addEventListener("click", (event) => {
   }
   if (actionEl.dataset.action === "reset-confirm") {
     localStorage.removeItem(STORAGE_KEY);
-    checklistStore.set({ checks: {}, docRequirement: null, confirmReset: false });
+    checklistStore.set({
+      checks: {},
+      docRequirement: null,
+      confirmReset: false,
+      env: "p01",
+      designLinks: DEFAULT_LINKS
+    });
   }
   if (actionEl.dataset.action === "reset-cancel") {
     const state = checklistStore.get();
     checklistStore.set({ ...state, confirmReset: false });
+  }
+  if (actionEl.dataset.action === "add-design-link") {
+    const state = checklistStore.get();
+    checklistStore.set({
+      ...state,
+      designLinks: [...state.designLinks, ""]
+    });
   }
 });
 
@@ -177,9 +233,70 @@ function progress(state: ChecklistState) {
   return { total, done };
 }
 
+function escapeAttr(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function convertToDevLink(raw: string, env: EnvOption) {
+  if (!raw.trim()) {
+    return { output: "", status: "" };
+  }
+
+  const withProtocol = raw.startsWith("http://") || raw.startsWith("https://")
+    ? raw
+    : `https://${raw}`;
+
+  let url: URL;
+  try {
+    url = new URL(withProtocol);
+  } catch {
+    return { output: "", status: "URL invalida" };
+  }
+
+  const domainMap: Record<string, { country: string }> = {
+    "www.business.hsbc.uk": { country: "uk" },
+    "www.business.hsbc.fr": { country: "fr" }
+  };
+
+  const entry = domainMap[url.hostname];
+  if (!entry) {
+    return { output: "", status: "Dominio no reconocido" };
+  }
+
+  const segments = url.pathname.split("/").filter(Boolean);
+  const language = segments[0] ?? "";
+  const rest = segments.slice(1).join("/");
+
+  if (!language) {
+    return { output: "", status: "Idioma no encontrado en la URL" };
+  }
+
+  const base = `https://link.${entry.country}.dev.${env}.hsbc/${language}`;
+  const path = rest ? `/${rest}` : "";
+  const output = `${base}${path}${url.search}${url.hash}`;
+
+  return { output, status: `Listo | entorno ${env}` };
+}
+
 function render(state: ChecklistState) {
   const { total, done } = progress(state);
   const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const devLinks = state.designLinks.map((link) =>
+    convertToDevLink(link, state.env)
+  );
+  const firstError = devLinks.find(
+    (result, index) => state.designLinks[index]?.trim() && result.status !== `Listo | entorno ${state.env}`
+  );
+  const hasAnyInput = state.designLinks.some((link) => link.trim().length > 0);
+  const overallStatus = firstError
+    ? firstError.status
+    : hasAnyInput
+      ? `Listo | entorno ${state.env}`
+      : "Ingresa un link para generar la version de desarrollo.";
 
   app.innerHTML = `
     <main class="min-h-screen bg-[radial-gradient(circle_at_top,_#121521_0%,_#0b0c0f_55%,_#08090b_100%)] px-6 py-10 text-slate-100 md:px-12">
@@ -221,6 +338,81 @@ function render(state: ChecklistState) {
                   Limpiar checklist
                 </button>
               </div>
+            </div>
+          </div>
+          <div class="rounded-2xl border border-white/10 bg-[linear-gradient(150deg,_rgba(21,24,33,0.92),_rgba(11,12,15,0.92))] px-6 py-5 shadow-[0_12px_40px_rgba(0,0,0,0.45)]">
+            <div class="flex flex-col gap-4">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p class="text-sm text-slate-400">Conversion de links</p>
+                  <p class="mt-1 text-lg font-semibold text-slate-100">
+                    Live a desarrollo
+                  </p>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                  <label class="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-slate-400">
+                    <span>Entorno</span>
+                    <select
+                      data-field="env"
+                      class="rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200"
+                    >
+                      ${(["p01", "p02", "bwe", "gwe"] as EnvOption[])
+                        .map(
+                          (option) =>
+                            `<option value="${option}" ${
+                              state.env === option ? "selected" : ""
+                            }>${option}</option>`
+                        )
+                        .join("")}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    data-action="add-design-link"
+                    class="rounded-full border border-white/20 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-white/40 hover:text-slate-50"
+                  >
+                    Agregar link
+                  </button>
+                </div>
+              </div>
+              <div class="grid gap-5">
+                ${state.designLinks
+                  .map((link, index) => {
+                    const result = devLinks[index];
+                    return `
+                    <div class="grid gap-3 md:grid-cols-2">
+                      <label class="grid gap-2 text-sm text-slate-300">
+                        <span class="text-xs uppercase tracking-[0.2em] text-slate-500">
+                          Link live ${index + 1}
+                        </span>
+                        <input
+                          type="url"
+                          data-field="designLink"
+                          data-index="${index}"
+                          placeholder="https://www.business.hsbc.uk/en-gb/..."
+                          value="${escapeAttr(link)}"
+                          class="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-white/40"
+                        />
+                      </label>
+                      <label class="grid gap-2 text-sm text-slate-300">
+                        <span class="text-xs uppercase tracking-[0.2em] text-slate-500">
+                          Link dev generado
+                        </span>
+                        <input
+                          type="text"
+                          readonly
+                          value="${escapeAttr(result.output)}"
+                          class="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none"
+                        />
+                      </label>
+                    </div>
+                  `;
+                  })
+                  .join("")}
+              </div>
+              <p class="text-xs text-slate-500">
+                ${overallStatus}
+              </p>
             </div>
           </div>
         </header>
