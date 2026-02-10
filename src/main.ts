@@ -8,6 +8,7 @@ type Task = {
   description: string;
   itemPath: string;
   comment: string;
+  requireComment: boolean;
 };
 
 type ChecklistState = {
@@ -38,7 +39,8 @@ const DEFAULT_LINKS = [""];
 const EMPTY_TASK: Task = {
   description: "",
   itemPath: "",
-  comment: ""
+  comment: "",
+  requireComment: false
 };
 
 const steps: Step[] = [
@@ -140,7 +142,8 @@ function loadState(): ChecklistState {
         ? parsedTasks.map((task) => ({
             description: task?.description ?? "",
             itemPath: task?.itemPath ?? "",
-            comment: task?.comment ?? ""
+            comment: task?.comment ?? "",
+            requireComment: task?.requireComment ?? false
           }))
         : [{ ...EMPTY_TASK }];
 
@@ -208,6 +211,25 @@ app.addEventListener("change", (event) => {
       ...state,
       docRequirement: value,
       checks: nextChecks
+    });
+  }
+
+  if (target.matches("input[type='checkbox'][data-task-toggle='requireComment']")) {
+    const taskIndex = Number(target.dataset.taskIndex ?? "-1");
+    if (Number.isNaN(taskIndex)) return;
+
+    const state = checklistStore.get();
+    if (!state.tasks[taskIndex]) return;
+
+    const nextTasks = [...state.tasks];
+    nextTasks[taskIndex] = {
+      ...nextTasks[taskIndex],
+      requireComment: target.checked
+    };
+
+    checklistStore.set({
+      ...state,
+      tasks: nextTasks
     });
   }
 });
@@ -290,16 +312,27 @@ app.addEventListener("click", (event) => {
     if (Number.isNaN(taskIndex)) return;
     const state = checklistStore.get();
     const nextTasks = state.tasks.filter((_, index) => index !== taskIndex);
+    const finalTasks = nextTasks.length > 0 ? nextTasks : [{ ...EMPTY_TASK }];
     checklistStore.set({
       ...state,
-      tasks: nextTasks
+      tasks: finalTasks
     });
   }
 });
 
+let renderTimeout: number | null = null;
+
 checklistStore.subscribe((value) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-  render(value);
+
+  if (renderTimeout !== null) {
+    window.clearTimeout(renderTimeout);
+  }
+
+  renderTimeout = window.setTimeout(() => {
+    render(value);
+    renderTimeout = null;
+  }, 250);
 });
 
 function isVisible(item: Item, state: ChecklistState): boolean {
@@ -311,16 +344,19 @@ function isVisible(item: Item, state: ChecklistState): boolean {
 }
 
 function taskProgress(task: Task) {
-  const total = 3;
-  const done =
+  const total = task.requireComment ? 3 : 2;
+  const doneBase =
     (task.description.trim() ? 1 : 0) +
-    (task.itemPath.trim() ? 1 : 0) +
-    (task.comment.trim() ? 1 : 0);
+    (task.itemPath.trim() ? 1 : 0);
+  const doneComment = task.requireComment && task.comment.trim() ? 1 : 0;
+  const done = doneBase + doneComment;
   return { total, done };
 }
 
 function isTaskComplete(task: Task): boolean {
-  return task.description.trim().length > 0 && task.itemPath.trim().length > 0;
+  const hasBase = task.description.trim().length > 0 && task.itemPath.trim().length > 0;
+  if (!task.requireComment) return hasBase;
+  return hasBase && task.comment.trim().length > 0;
 }
 
 function progress(state: ChecklistState) {
@@ -580,7 +616,7 @@ function render(state: ChecklistState) {
                               </div>
                               <div class="grid gap-3">
                                 <label class="grid gap-2 text-sm text-slate-300">
-                                  <span class="text-xs uppercase tracking-[0.2em] text-slate-500">Descripcion *</span>
+                                  <span class="text-xs tracking-[0.12em] text-slate-500">Descripcion *</span>
                                   <input
                                     type="text"
                                     data-task-field="description"
@@ -591,7 +627,7 @@ function render(state: ChecklistState) {
                                   />
                                 </label>
                                 <label class="grid gap-2 text-sm text-slate-300">
-                                  <span class="text-xs uppercase tracking-[0.2em] text-slate-500">Agregar item path *</span>
+                                  <span class="text-xs tracking-[0.12em] text-slate-500">Item path *</span>
                                   <input
                                     type="text"
                                     data-task-field="itemPath"
@@ -601,16 +637,33 @@ function render(state: ChecklistState) {
                                     class="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-white/40"
                                   />
                                 </label>
+                                <label class="inline-flex items-center gap-2 text-xs tracking-[0.12em] text-slate-400">
+                                  <input
+                                    type="checkbox"
+                                    data-task-toggle="requireComment"
+                                    data-task-index="${index}"
+                                    ${task.requireComment ? "checked" : ""}
+                                    class="h-4 w-4 rounded border-white/30 bg-white/10"
+                                  />
+                                  <span>Require comentarios</span>
+                                </label>
+                                ${
+                                  task.requireComment
+                                    ? `
                                 <label class="grid gap-2 text-sm text-slate-300">
-                                  <span class="text-xs uppercase tracking-[0.2em] text-slate-500">Si existe error u observacion, agrega comentario</span>
+                                  <span class="text-xs tracking-[0.12em] text-slate-500">Si existe error u observacion, agrega comentario *</span>
                                   <textarea
                                     data-task-field="comment"
                                     data-task-index="${index}"
-                                    placeholder="Comentario opcional"
+                                    placeholder="Comentario requerido"
                                     rows="3"
+                                    required
                                     class="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-white/40"
                                   >${escapeAttr(task.comment)}</textarea>
                                 </label>
+                                    `
+                                    : ""
+                                }
                               </div>
                             </div>
                           `;
