@@ -243,6 +243,7 @@ app.addEventListener("input", (event) => {
     const state = checklistStore.get();
     const nextLinks = [...state.designLinks];
     nextLinks[index] = target.value;
+    skipNextRender = true;
     checklistStore.set({ ...state, designLinks: nextLinks });
   }
 
@@ -265,6 +266,7 @@ app.addEventListener("input", (event) => {
       ...nextTasks[taskIndex],
       [field]: target.value
     };
+    skipNextRender = true;
     checklistStore.set({ ...state, tasks: nextTasks });
   }
 });
@@ -320,19 +322,19 @@ app.addEventListener("click", (event) => {
   }
 });
 
-let renderTimeout: number | null = null;
+let skipNextRender = false;
 
 checklistStore.subscribe((value) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
 
-  if (renderTimeout !== null) {
-    window.clearTimeout(renderTimeout);
+  if (skipNextRender) {
+    skipNextRender = false;
+    updateProgressUi(value);
+    updateLinkConversionUi(value);
+    return;
   }
 
-  renderTimeout = window.setTimeout(() => {
-    render(value);
-    renderTimeout = null;
-  }, 250);
+  render(value);
 });
 
 function isVisible(item: Item, state: ChecklistState): boolean {
@@ -343,20 +345,19 @@ function isVisible(item: Item, state: ChecklistState): boolean {
   return true;
 }
 
-function taskProgress(task: Task) {
-  const total = task.requireComment ? 3 : 2;
-  const doneBase =
-    (task.description.trim() ? 1 : 0) +
-    (task.itemPath.trim() ? 1 : 0);
-  const doneComment = task.requireComment && task.comment.trim() ? 1 : 0;
-  const done = doneBase + doneComment;
-  return { total, done };
-}
-
 function isTaskComplete(task: Task): boolean {
   const hasBase = task.description.trim().length > 0 && task.itemPath.trim().length > 0;
   if (!task.requireComment) return hasBase;
   return hasBase && task.comment.trim().length > 0;
+}
+
+function tasksCompletionProgress(state: ChecklistState) {
+  const total = state.tasks.length;
+  const done = state.tasks.reduce(
+    (count, task) => count + (isTaskComplete(task) ? 1 : 0),
+    0
+  );
+  return { total, done };
 }
 
 function progress(state: ChecklistState) {
@@ -368,14 +369,98 @@ function progress(state: ChecklistState) {
     (count, item) => count + (state.checks[item.id] ? 1 : 0),
     0
   );
-  const tasksTotal = state.tasks.length;
-  const tasksDone = state.tasks.reduce(
-    (count, task) => count + (isTaskComplete(task) ? 1 : 0),
-    0
-  );
+  const { total: tasksTotal, done: tasksDone } = tasksCompletionProgress(state);
   const total = checklistTotal + tasksTotal;
   const done = checklistDone + tasksDone;
   return { total, done };
+}
+
+function updateProgressUi(state: ChecklistState) {
+  if (!app) return;
+
+  const { total, done } = progress(state);
+  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const remaining = Math.max(total - done, 0);
+
+  const mainSummary = app.querySelector<HTMLElement>("[data-role='progress-summary']");
+  if (mainSummary) {
+    mainSummary.textContent = `${done} / ${total} items`;
+  }
+
+  const mainBar = app.querySelector<HTMLElement>("[data-role='progress-main-bar']");
+  if (mainBar) {
+    mainBar.style.width = `${percent}%`;
+  }
+
+  const mainPercent = app.querySelector<HTMLElement>("[data-role='progress-main-percent']");
+  if (mainPercent) {
+    mainPercent.textContent = `${percent}% completado`;
+  }
+
+  const footerBar = app.querySelector<HTMLElement>("[data-role='progress-footer-bar']");
+  if (footerBar) {
+    footerBar.style.width = `${percent}%`;
+  }
+
+  const footerRemaining = app.querySelector<HTMLElement>("[data-role='progress-footer-remaining']");
+  if (footerRemaining) {
+    footerRemaining.textContent = `${remaining} pendientes`;
+  }
+
+  const footerSummary = app.querySelector<HTMLElement>("[data-role='progress-footer-summary']");
+  if (footerSummary) {
+    footerSummary.textContent = `${done} / ${total}`;
+  }
+
+  const tasksProgress = tasksCompletionProgress(state);
+  const tasksPercent =
+    tasksProgress.total === 0 ? 0 : Math.round((tasksProgress.done / tasksProgress.total) * 100);
+
+  const tasksSummary = app.querySelector<HTMLElement>("[data-role='tasks-progress-summary']");
+  if (tasksSummary) {
+    tasksSummary.textContent = `${tasksProgress.done} / ${tasksProgress.total} tareas completas`;
+  }
+
+  const tasksBar = app.querySelector<HTMLElement>("[data-role='tasks-progress-bar']");
+  if (tasksBar) {
+    tasksBar.style.width = `${tasksPercent}%`;
+  }
+
+  const tasksPercentText = app.querySelector<HTMLElement>("[data-role='tasks-progress-percent']");
+  if (tasksPercentText) {
+    tasksPercentText.textContent = `${tasksPercent}% completado`;
+  }
+}
+
+function updateLinkConversionUi(state: ChecklistState) {
+  if (!app) return;
+
+  const devLinks = state.designLinks.map((link) => convertToDevLink(link, state.env));
+
+  devLinks.forEach((result, index) => {
+    const outputInput = app.querySelector<HTMLInputElement>(
+      `input[data-role='design-link-output'][data-index='${index}']`
+    );
+    if (outputInput) {
+      outputInput.value = result.output;
+    }
+  });
+
+  const firstError = devLinks.find(
+    (result, index) =>
+      state.designLinks[index]?.trim() && result.status !== `Listo | entorno ${state.env}`
+  );
+  const hasAnyInput = state.designLinks.some((link) => link.trim().length > 0);
+  const overallStatus = firstError
+    ? firstError.status
+    : hasAnyInput
+      ? `Listo | entorno ${state.env}`
+      : "Ingresa un link para generar la version de desarrollo.";
+
+  const statusEl = app.querySelector<HTMLElement>("[data-role='design-links-status']");
+  if (statusEl) {
+    statusEl.textContent = overallStatus;
+  }
 }
 
 function escapeAttr(value: string) {
@@ -475,14 +560,14 @@ function render(state: ChecklistState) {
             <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <p class="text-sm text-slate-400">Progreso global</p>
-                <p class="mt-1 text-2xl font-semibold text-slate-100">${done} / ${total} items</p>
+                <p data-role="progress-summary" class="mt-1 text-2xl font-semibold text-slate-100">${done} / ${total} items</p>
               </div>
               <div class="flex w-full flex-col gap-3 md:w-64">
                 <div>
                   <div class="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                    <div class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
+                    <div data-role="progress-main-bar" class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
                   </div>
-                  <p class="mt-2 text-xs text-slate-400">${percent}% completado</p>
+                  <p data-role="progress-main-percent" class="mt-2 text-xs text-slate-400">${percent}% completado</p>
                 </div>
                 <button
                   type="button"
@@ -554,6 +639,8 @@ function render(state: ChecklistState) {
                         </span>
                         <input
                           type="text"
+                          data-role="design-link-output"
+                          data-index="${index}"
                           readonly
                           value="${escapeAttr(result.output)}"
                           class="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none"
@@ -564,7 +651,7 @@ function render(state: ChecklistState) {
                   })
                   .join("")}
               </div>
-              <p class="text-xs text-slate-500">
+              <p data-role="design-links-status" class="text-xs text-slate-500">
                 ${overallStatus}
               </p>
             </div>
@@ -575,6 +662,12 @@ function render(state: ChecklistState) {
           ${steps
             .map((step) => {
               if (step.id === "tasks") {
+                const tasksProgress = tasksCompletionProgress(state);
+                const tasksPercent =
+                  tasksProgress.total === 0
+                    ? 0
+                    : Math.round((tasksProgress.done / tasksProgress.total) * 100);
+
                 return `
                   <article class="rounded-3xl border border-white/10 bg-[linear-gradient(150deg,_rgba(21,24,33,0.92),_rgba(11,12,15,0.92))] px-6 py-6 shadow-[0_12px_40px_rgba(0,0,0,0.45)]">
                     <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
@@ -590,11 +683,18 @@ function render(state: ChecklistState) {
                         Agregar tarea
                       </button>
                     </div>
+                    <div class="mb-5 rounded-xl border border-white/10 bg-black/20 px-4 py-3">
+                      <div class="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                        <div data-role="tasks-progress-bar" class="h-full rounded-full bg-[#7ef0c0]" style="width: ${tasksPercent}%"></div>
+                      </div>
+                      <div class="mt-2 flex items-center justify-between gap-3 text-xs text-slate-400">
+                        <span data-role="tasks-progress-summary">${tasksProgress.done} / ${tasksProgress.total} tareas completas</span>
+                        <span data-role="tasks-progress-percent">${tasksPercent}% completado</span>
+                      </div>
+                    </div>
                     <div class="grid gap-4">
                       ${state.tasks
                         .map((task, index) => {
-                          const taskStats = taskProgress(task);
-                          const taskPercent = Math.round((taskStats.done / taskStats.total) * 100);
                           return `
                             <div class="rounded-xl border border-white/10 bg-white/5 px-4 py-4">
                               <div class="mb-3 flex items-center justify-between gap-3">
@@ -607,12 +707,6 @@ function render(state: ChecklistState) {
                                 >
                                   Eliminar
                                 </button>
-                              </div>
-                              <div class="mb-4">
-                                <div class="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-                                  <div class="h-full rounded-full bg-[#7ef0c0]" style="width: ${taskPercent}%"></div>
-                                </div>
-                                <p class="mt-1 text-xs text-slate-400">${taskStats.done} / ${taskStats.total} campos completados</p>
                               </div>
                               <div class="grid gap-3">
                                 <label class="grid gap-2 text-sm text-slate-300">
@@ -742,11 +836,11 @@ function render(state: ChecklistState) {
           <div class="flex flex-wrap items-center gap-4">
             <div class="min-w-[180px] flex-1">
               <div class="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                <div class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
+                <div data-role="progress-footer-bar" class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
               </div>
-              <p class="mt-2 text-xs text-slate-400">${remaining} pendientes</p>
+              <p data-role="progress-footer-remaining" class="mt-2 text-xs text-slate-400">${remaining} pendientes</p>
             </div>
-            <div class="text-sm font-semibold text-slate-100">
+            <div data-role="progress-footer-summary" class="text-sm font-semibold text-slate-100">
               ${done} / ${total}
             </div>
           </div>
