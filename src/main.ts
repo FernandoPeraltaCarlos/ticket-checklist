@@ -4,12 +4,20 @@ import { atom } from "nanostores";
 type DocRequirement = "si" | "no" | null;
 type EnvOption = "p01" | "p02" | "bwe" | "gwe";
 
+type Task = {
+  description: string;
+  itemPath: string;
+  comment: string;
+  requireComment: boolean;
+};
+
 type ChecklistState = {
   checks: Record<string, boolean>;
   docRequirement: DocRequirement;
   confirmReset: boolean;
   env: EnvOption;
   designLinks: string[];
+  tasks: Task[];
 };
 
 type Item = {
@@ -28,6 +36,12 @@ type Step = {
 
 const STORAGE_KEY = "ticket-checklist-v1";
 const DEFAULT_LINKS = [""];
+const EMPTY_TASK: Task = {
+  description: "",
+  itemPath: "",
+  comment: "",
+  requireComment: false
+};
 
 const steps: Step[] = [
   {
@@ -35,6 +49,18 @@ const steps: Step[] = [
     title: "1. Preparacion",
     description: "Verifica lo esencial antes de iniciar.",
     items: [
+      {
+        id: "classification_correct",
+        label: "La clasificacion es correcta?"
+      },
+      {
+        id: "assets_included",
+        label: "Estan incluidos los assets?"
+      },
+      {
+        id: "queue_correct",
+        label: "El queue es correcto?"
+      },
       {
         id: "design_link",
         label: "Validar el \"design link\" y confirmar que es procesable"
@@ -64,8 +90,14 @@ const steps: Step[] = [
     ]
   },
   {
+    id: "tasks",
+    title: "2. Tareas",
+    description: "Registra cada tarea y su contexto.",
+    items: []
+  },
+  {
     id: "delivery",
-    title: "2. Entrega",
+    title: "3. Entrega",
     description: "Validaciones finales antes del cierre.",
     items: [
       { id: "qa_link", label: "Confirmar inclusion del QA link" },
@@ -87,24 +119,41 @@ function loadState(): ChecklistState {
       docRequirement: null,
       confirmReset: false,
       env: "p01",
-      designLinks: DEFAULT_LINKS
+      designLinks: DEFAULT_LINKS,
+      tasks: [{ ...EMPTY_TASK }]
     };
   }
 
   try {
-    const parsed = JSON.parse(raw) as ChecklistState & { designLink?: string };
+    const parsed = JSON.parse(raw) as Partial<ChecklistState> & {
+      designLink?: string;
+      task?: Partial<Task>;
+    };
     const savedLinks =
       Array.isArray(parsed.designLinks) && parsed.designLinks.length > 0
         ? parsed.designLinks
         : parsed.designLink
           ? [parsed.designLink]
           : DEFAULT_LINKS;
+    const legacyTasks = parsed.task ? [parsed.task] : [];
+    const parsedTasks = Array.isArray(parsed.tasks) ? parsed.tasks : legacyTasks;
+    const savedTasks =
+      parsedTasks.length > 0
+        ? parsedTasks.map((task) => ({
+            description: task?.description ?? "",
+            itemPath: task?.itemPath ?? "",
+            comment: task?.comment ?? "",
+            requireComment: task?.requireComment ?? false
+          }))
+        : [{ ...EMPTY_TASK }];
+
     return {
       checks: parsed.checks ?? {},
       docRequirement: parsed.docRequirement ?? null,
       confirmReset: false,
       env: parsed.env ?? "p01",
-      designLinks: savedLinks
+      designLinks: savedLinks,
+      tasks: savedTasks
     };
   } catch {
     return {
@@ -112,7 +161,8 @@ function loadState(): ChecklistState {
       docRequirement: null,
       confirmReset: false,
       env: "p01",
-      designLinks: DEFAULT_LINKS
+      designLinks: DEFAULT_LINKS,
+      tasks: [{ ...EMPTY_TASK }]
     };
   }
 }
@@ -163,10 +213,29 @@ app.addEventListener("change", (event) => {
       checks: nextChecks
     });
   }
+
+  if (target.matches("input[type='checkbox'][data-task-toggle='requireComment']")) {
+    const taskIndex = Number(target.dataset.taskIndex ?? "-1");
+    if (Number.isNaN(taskIndex)) return;
+
+    const state = checklistStore.get();
+    if (!state.tasks[taskIndex]) return;
+
+    const nextTasks = [...state.tasks];
+    nextTasks[taskIndex] = {
+      ...nextTasks[taskIndex],
+      requireComment: target.checked
+    };
+
+    checklistStore.set({
+      ...state,
+      tasks: nextTasks
+    });
+  }
 });
 
 app.addEventListener("input", (event) => {
-  const target = event.target as HTMLInputElement | HTMLSelectElement | null;
+  const target = event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
   if (!target) return;
 
   if (target.matches("input[type='url'][data-field='designLink']")) {
@@ -174,6 +243,7 @@ app.addEventListener("input", (event) => {
     const state = checklistStore.get();
     const nextLinks = [...state.designLinks];
     nextLinks[index] = target.value;
+    skipNextRender = true;
     checklistStore.set({ ...state, designLinks: nextLinks });
   }
 
@@ -181,6 +251,23 @@ app.addEventListener("input", (event) => {
     const value = target.value as EnvOption;
     const state = checklistStore.get();
     checklistStore.set({ ...state, env: value });
+  }
+
+  if (target.matches("input[data-task-field], textarea[data-task-field]")) {
+    const field = target.dataset.taskField as keyof Task | undefined;
+    const taskIndex = Number(target.dataset.taskIndex ?? "-1");
+    if (!field || Number.isNaN(taskIndex)) return;
+
+    const state = checklistStore.get();
+    if (!state.tasks[taskIndex]) return;
+
+    const nextTasks = [...state.tasks];
+    nextTasks[taskIndex] = {
+      ...nextTasks[taskIndex],
+      [field]: target.value
+    };
+    skipNextRender = true;
+    checklistStore.set({ ...state, tasks: nextTasks });
   }
 });
 
@@ -200,7 +287,8 @@ app.addEventListener("click", (event) => {
       docRequirement: null,
       confirmReset: false,
       env: "p01",
-      designLinks: DEFAULT_LINKS
+      designLinks: DEFAULT_LINKS,
+      tasks: [{ ...EMPTY_TASK }]
     });
   }
   if (actionEl.dataset.action === "reset-cancel") {
@@ -214,10 +302,38 @@ app.addEventListener("click", (event) => {
       designLinks: [...state.designLinks, ""]
     });
   }
+  if (actionEl.dataset.action === "add-task") {
+    const state = checklistStore.get();
+    checklistStore.set({
+      ...state,
+      tasks: [...state.tasks, { ...EMPTY_TASK }]
+    });
+  }
+  if (actionEl.dataset.action === "delete-task") {
+    const taskIndex = Number(actionEl.dataset.taskIndex ?? "-1");
+    if (Number.isNaN(taskIndex)) return;
+    const state = checklistStore.get();
+    const nextTasks = state.tasks.filter((_, index) => index !== taskIndex);
+    const finalTasks = nextTasks.length > 0 ? nextTasks : [{ ...EMPTY_TASK }];
+    checklistStore.set({
+      ...state,
+      tasks: finalTasks
+    });
+  }
 });
+
+let skipNextRender = false;
 
 checklistStore.subscribe((value) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+
+  if (skipNextRender) {
+    skipNextRender = false;
+    updateProgressUi(value);
+    updateLinkConversionUi(value);
+    return;
+  }
+
   render(value);
 });
 
@@ -229,16 +345,122 @@ function isVisible(item: Item, state: ChecklistState): boolean {
   return true;
 }
 
+function isTaskComplete(task: Task): boolean {
+  const hasBase = task.description.trim().length > 0 && task.itemPath.trim().length > 0;
+  if (!task.requireComment) return hasBase;
+  return hasBase && task.comment.trim().length > 0;
+}
+
+function tasksCompletionProgress(state: ChecklistState) {
+  const total = state.tasks.length;
+  const done = state.tasks.reduce(
+    (count, task) => count + (isTaskComplete(task) ? 1 : 0),
+    0
+  );
+  return { total, done };
+}
+
 function progress(state: ChecklistState) {
   const visibleItems = steps.flatMap((step) =>
     step.items.filter((item) => item.type !== "question" && isVisible(item, state))
   );
-  const total = visibleItems.length;
-  const done = visibleItems.reduce(
+  const checklistTotal = visibleItems.length;
+  const checklistDone = visibleItems.reduce(
     (count, item) => count + (state.checks[item.id] ? 1 : 0),
     0
   );
+  const { total: tasksTotal, done: tasksDone } = tasksCompletionProgress(state);
+  const total = checklistTotal + tasksTotal;
+  const done = checklistDone + tasksDone;
   return { total, done };
+}
+
+function updateProgressUi(state: ChecklistState) {
+  if (!app) return;
+
+  const { total, done } = progress(state);
+  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const remaining = Math.max(total - done, 0);
+
+  const mainSummary = app.querySelector<HTMLElement>("[data-role='progress-summary']");
+  if (mainSummary) {
+    mainSummary.textContent = `${done} / ${total} items`;
+  }
+
+  const mainBar = app.querySelector<HTMLElement>("[data-role='progress-main-bar']");
+  if (mainBar) {
+    mainBar.style.width = `${percent}%`;
+  }
+
+  const mainPercent = app.querySelector<HTMLElement>("[data-role='progress-main-percent']");
+  if (mainPercent) {
+    mainPercent.textContent = `${percent}% completado`;
+  }
+
+  const footerBar = app.querySelector<HTMLElement>("[data-role='progress-footer-bar']");
+  if (footerBar) {
+    footerBar.style.width = `${percent}%`;
+  }
+
+  const footerRemaining = app.querySelector<HTMLElement>("[data-role='progress-footer-remaining']");
+  if (footerRemaining) {
+    footerRemaining.textContent = `${remaining} pendientes`;
+  }
+
+  const footerSummary = app.querySelector<HTMLElement>("[data-role='progress-footer-summary']");
+  if (footerSummary) {
+    footerSummary.textContent = `${done} / ${total}`;
+  }
+
+  const tasksProgress = tasksCompletionProgress(state);
+  const tasksPercent =
+    tasksProgress.total === 0 ? 0 : Math.round((tasksProgress.done / tasksProgress.total) * 100);
+
+  const tasksSummary = app.querySelector<HTMLElement>("[data-role='tasks-progress-summary']");
+  if (tasksSummary) {
+    tasksSummary.textContent = `${tasksProgress.done} / ${tasksProgress.total} tareas completas`;
+  }
+
+  const tasksBar = app.querySelector<HTMLElement>("[data-role='tasks-progress-bar']");
+  if (tasksBar) {
+    tasksBar.style.width = `${tasksPercent}%`;
+  }
+
+  const tasksPercentText = app.querySelector<HTMLElement>("[data-role='tasks-progress-percent']");
+  if (tasksPercentText) {
+    tasksPercentText.textContent = `${tasksPercent}% completado`;
+  }
+}
+
+function updateLinkConversionUi(state: ChecklistState) {
+  if (!app) return;
+
+  const devLinks = state.designLinks.map((link) => convertToDevLink(link, state.env));
+
+  devLinks.forEach((result, index) => {
+    const outputInput = app.querySelector<HTMLInputElement>(
+      `input[data-role='design-link-output'][data-index='${index}']`
+    );
+    if (outputInput) {
+      outputInput.value = result.output;
+    }
+  });
+
+  const firstError = devLinks.find(
+    (result, index) =>
+      state.designLinks[index]?.trim() && result.status !== `Listo | entorno ${state.env}`
+  );
+  const hasAnyInput = state.designLinks.some((link) => link.trim().length > 0);
+  const overallStatus = firstError
+    ? firstError.status
+    : hasAnyInput
+      ? `Listo | entorno ${state.env}`
+      : "Ingresa un link para generar la version de desarrollo.";
+
+  const statusEl = app.querySelector<HTMLElement>("[data-role='design-links-status']");
+  if (statusEl) {
+    statusEl.textContent = overallStatus;
+  }
 }
 
 function escapeAttr(value: string) {
@@ -297,6 +519,8 @@ function convertToDevLink(raw: string, env: EnvOption) {
 }
 
 function render(state: ChecklistState) {
+  if (!app) return;
+
   const { total, done } = progress(state);
   const percent = total === 0 ? 0 : Math.round((done / total) * 100);
   const remaining = Math.max(total - done, 0);
@@ -336,14 +560,14 @@ function render(state: ChecklistState) {
             <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <p class="text-sm text-slate-400">Progreso global</p>
-                <p class="mt-1 text-2xl font-semibold text-slate-100">${done} / ${total} items</p>
+                <p data-role="progress-summary" class="mt-1 text-2xl font-semibold text-slate-100">${done} / ${total} items</p>
               </div>
               <div class="flex w-full flex-col gap-3 md:w-64">
                 <div>
                   <div class="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                    <div class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
+                    <div data-role="progress-main-bar" class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
                   </div>
-                  <p class="mt-2 text-xs text-slate-400">${percent}% completado</p>
+                  <p data-role="progress-main-percent" class="mt-2 text-xs text-slate-400">${percent}% completado</p>
                 </div>
                 <button
                   type="button"
@@ -415,6 +639,8 @@ function render(state: ChecklistState) {
                         </span>
                         <input
                           type="text"
+                          data-role="design-link-output"
+                          data-index="${index}"
                           readonly
                           value="${escapeAttr(result.output)}"
                           class="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none"
@@ -425,7 +651,7 @@ function render(state: ChecklistState) {
                   })
                   .join("")}
               </div>
-              <p class="text-xs text-slate-500">
+              <p data-role="design-links-status" class="text-xs text-slate-500">
                 ${overallStatus}
               </p>
             </div>
@@ -435,6 +661,113 @@ function render(state: ChecklistState) {
         <section class="grid gap-6">
           ${steps
             .map((step) => {
+              if (step.id === "tasks") {
+                const tasksProgress = tasksCompletionProgress(state);
+                const tasksPercent =
+                  tasksProgress.total === 0
+                    ? 0
+                    : Math.round((tasksProgress.done / tasksProgress.total) * 100);
+
+                return `
+                  <article class="rounded-3xl border border-white/10 bg-[linear-gradient(150deg,_rgba(21,24,33,0.92),_rgba(11,12,15,0.92))] px-6 py-6 shadow-[0_12px_40px_rgba(0,0,0,0.45)]">
+                    <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h2 class="text-xl font-semibold text-slate-50 font-['Space_Grotesk']">${step.title}</h2>
+                        <p class="mt-1 text-sm text-slate-400">${step.description}</p>
+                      </div>
+                      <button
+                        type="button"
+                        data-action="add-task"
+                        class="rounded-full border border-white/20 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-white/40 hover:text-slate-50"
+                      >
+                        Agregar tarea
+                      </button>
+                    </div>
+                    <div class="mb-5 rounded-xl border border-white/10 bg-black/20 px-4 py-3">
+                      <div class="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                        <div data-role="tasks-progress-bar" class="h-full rounded-full bg-[#7ef0c0]" style="width: ${tasksPercent}%"></div>
+                      </div>
+                      <div class="mt-2 flex items-center justify-between gap-3 text-xs text-slate-400">
+                        <span data-role="tasks-progress-summary">${tasksProgress.done} / ${tasksProgress.total} tareas completas</span>
+                        <span data-role="tasks-progress-percent">${tasksPercent}% completado</span>
+                      </div>
+                    </div>
+                    <div class="grid gap-4">
+                      ${state.tasks
+                        .map((task, index) => {
+                          return `
+                            <div class="rounded-xl border border-white/10 bg-white/5 px-4 py-4">
+                              <div class="mb-3 flex items-center justify-between gap-3">
+                                <p class="text-sm font-medium text-slate-100">Tarea ${index + 1}</p>
+                                <button
+                                  type="button"
+                                  data-action="delete-task"
+                                  data-task-index="${index}"
+                                  class="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 transition hover:border-rose-300/40 hover:text-rose-200"
+                                >
+                                  Eliminar
+                                </button>
+                              </div>
+                              <div class="grid gap-3">
+                                <label class="grid gap-2 text-sm text-slate-300">
+                                  <span class="text-xs tracking-[0.12em] text-slate-500">Descripcion *</span>
+                                  <input
+                                    type="text"
+                                    data-task-field="description"
+                                    data-task-index="${index}"
+                                    placeholder="Describe la tarea..."
+                                    value="${escapeAttr(task.description)}"
+                                    class="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-white/40"
+                                  />
+                                </label>
+                                <label class="grid gap-2 text-sm text-slate-300">
+                                  <span class="text-xs tracking-[0.12em] text-slate-500">Item path *</span>
+                                  <input
+                                    type="text"
+                                    data-task-field="itemPath"
+                                    data-task-index="${index}"
+                                    placeholder="Ej: /home/dashboard/settings"
+                                    value="${escapeAttr(task.itemPath)}"
+                                    class="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-white/40"
+                                  />
+                                </label>
+                                <label class="inline-flex items-center gap-2 text-xs tracking-[0.12em] text-slate-400">
+                                  <input
+                                    type="checkbox"
+                                    data-task-toggle="requireComment"
+                                    data-task-index="${index}"
+                                    ${task.requireComment ? "checked" : ""}
+                                    class="h-4 w-4 rounded border-white/30 bg-white/10"
+                                  />
+                                  <span>Require comentarios</span>
+                                </label>
+                                ${
+                                  task.requireComment
+                                    ? `
+                                <label class="grid gap-2 text-sm text-slate-300">
+                                  <span class="text-xs tracking-[0.12em] text-slate-500">Si existe error u observacion, agrega comentario *</span>
+                                  <textarea
+                                    data-task-field="comment"
+                                    data-task-index="${index}"
+                                    placeholder="Comentario requerido"
+                                    rows="3"
+                                    required
+                                    class="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-100 outline-none transition focus:border-white/40"
+                                  >${escapeAttr(task.comment)}</textarea>
+                                </label>
+                                    `
+                                    : ""
+                                }
+                              </div>
+                            </div>
+                          `;
+                        })
+                        .join("")}
+                    </div>
+                  </article>
+                `;
+              }
+
               const itemsMarkup = step.items
                 .map((item) => {
                   if (item.type === "question") {
@@ -503,11 +836,11 @@ function render(state: ChecklistState) {
           <div class="flex flex-wrap items-center gap-4">
             <div class="min-w-[180px] flex-1">
               <div class="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                <div class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
+                <div data-role="progress-footer-bar" class="h-full rounded-full bg-[#7ef0c0]" style="width: ${percent}%"></div>
               </div>
-              <p class="mt-2 text-xs text-slate-400">${remaining} pendientes</p>
+              <p data-role="progress-footer-remaining" class="mt-2 text-xs text-slate-400">${remaining} pendientes</p>
             </div>
-            <div class="text-sm font-semibold text-slate-100">
+            <div data-role="progress-footer-summary" class="text-sm font-semibold text-slate-100">
               ${done} / ${total}
             </div>
           </div>
